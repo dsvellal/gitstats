@@ -13,6 +13,7 @@ import subprocess
 import sys
 import time
 import zlib
+import hashlib
 
 if sys.version_info < (2, 6):
 	print >> sys.stderr, "Python 2.6 or higher is required for gitstats"
@@ -37,17 +38,18 @@ if 'GNUPLOT' in os.environ:
 	gnuplot_cmd = os.environ['GNUPLOT']
 
 conf = {
-	'max_domains': 10,
-	'max_ext_length': 10,
+	'max_domains': 1000,
+	'max_ext_length': 1000,
 	'style': 'gitstats.css',
-	'max_authors': 20,
+	'max_authors': 2000,
 	'authors_top': 5,
 	'commit_begin': '',
 	'commit_end': 'HEAD',
 	'linear_linestats': 1,
 	'project_name': '',
 	'processes': 8,
-	'start_date': ''
+	'start_date': '',
+	'anonymize':0
 }
 
 def getpipeoutput(cmds, quiet = False):
@@ -103,6 +105,12 @@ def getstatsummarycounts(line):
 	elif len(numbers) == 2 and line.find('(-)') != -1:
 		numbers.insert(1, 0); # only deletions were printed on line
 	return numbers
+
+def anonymize_if_needed(word):
+	hash_word = word
+	if (conf['anonymize'] == 1):
+		hash_word = int(hashlib.sha1(hash_word).hexdigest(), 16) % (10 ** 8)
+	return str(hash_word)
 
 VERSION = 0
 def getversion():
@@ -198,9 +206,9 @@ class DataCollector:
 	def collect(self, dir):
 		self.dir = dir
 		if len(conf['project_name']) == 0:
-			self.projectname = os.path.basename(os.path.abspath(dir))
+			self.projectname = anonymize_if_needed(os.path.basename(os.path.abspath(dir)))
 		else:
-			self.projectname = conf['project_name']
+			self.projectname = anonymize_if_needed(conf['project_name'])
 	
 	##
 	# Load cacheable data
@@ -756,8 +764,9 @@ class HTMLReportCreator(ReportCreator):
 
 		f.write('<dl>')
 		f.write('<dt>Project name</dt><dd>%s</dd>' % (data.projectname))
-		f.write('<dt>Generated</dt><dd>%s (in %d seconds)</dd>' % (datetime.datetime.now().strftime(format), time.time() - data.getStampCreated()))
-		f.write('<dt>Generator</dt><dd><a href="http://gitstats.sourceforge.net/">GitStats</a> (version %s), %s, %s</dd>' % (getversion(), getgitversion(), getgnuplotversion()))
+		if (conf['anonymize'] != 1):
+			f.write('<dt>Generated</dt><dd>%s (in %d seconds)</dd>' % (datetime.datetime.now().strftime(format), time.time() - data.getStampCreated()))
+			f.write('<dt>Generator</dt><dd><a href="http://gitstats.sourceforge.net/">GitStats</a> (version %s), %s, %s</dd>' % (getversion(), getgitversion(), getgnuplotversion()))
 		f.write('<dt>Report Period</dt><dd>%s to %s</dd>' % (data.getFirstCommitDate().strftime(format), data.getLastCommitDate().strftime(format)))
 		f.write('<dt>Age</dt><dd>%d days, %d active days (%3.2f%%)</dd>' % (data.getCommitDeltaDays(), len(data.getActiveDays()), (100.0 * len(data.getActiveDays()) / data.getCommitDeltaDays())))
 		f.write('<dt>Total Files</dt><dd>%s</dd>' % data.getTotalFiles())
@@ -966,10 +975,12 @@ class HTMLReportCreator(ReportCreator):
 		f.write('<tr><th>Author</th><th>Commits (%)</th><th>+ lines</th><th>- lines</th><th>First commit</th><th>Last commit</th><th class="unsortable">Age</th><th>Active days</th><th># by commits</th></tr>')
 		for author in data.getAuthors(conf['max_authors']):
 			info = data.getAuthorInfo(author)
+			author = anonymize_if_needed(author)
 			f.write('<tr><td>%s</td><td>%d (%.2f%%)</td><td>%d</td><td>%d</td><td>%s</td><td>%s</td><td>%s</td><td>%d</td><td>%d</td></tr>' % (author, info['commits'], info['commits_frac'], info['lines_added'], info['lines_removed'], info['date_first'], info['date_last'], info['timedelta'], len(info['active_days']), info['place_by_commits']))
 		f.write('</table>')
 
 		allauthors = data.getAuthors()
+		allauthors = [anonymize_if_needed(author) for author in allauthors]
 		if len(allauthors) > conf['max_authors']:
 			rest = allauthors[conf['max_authors']:]
 			f.write('<p class="moreauthors">These didn\'t make it to the top: %s</p>' % ', '.join(rest))
@@ -1025,6 +1036,7 @@ class HTMLReportCreator(ReportCreator):
 			authors = getkeyssortedbyvalues(authordict)
 			authors.reverse()
 			commits = data.author_of_month[yymm][authors[0]]
+			authors = [anonymize_if_needed(author) for author in authors]
 			next = ', '.join(authors[1:conf['authors_top']+1])
 			f.write('<tr><td>%s</td><td>%s</td><td>%d (%.2f%% of %d)</td><td>%s</td><td>%d</td></tr>' % (yymm, authors[0], commits, (100.0 * commits) / data.commits_by_month[yymm], data.commits_by_month[yymm], next, len(authors)))
 
@@ -1037,6 +1049,7 @@ class HTMLReportCreator(ReportCreator):
 			authors = getkeyssortedbyvalues(authordict)
 			authors.reverse()
 			commits = data.author_of_year[yy][authors[0]]
+			authors = [anonymize_if_needed(author) for author in authors]
 			next = ', '.join(authors[1:conf['authors_top']+1])
 			f.write('<tr><td>%s</td><td>%s</td><td>%d (%.2f%% of %d)</td><td>%s</td><td>%d</td></tr>' % (yy, authors[0], commits, (100.0 * commits) / data.commits_by_year[yy], data.commits_by_year[yy], next, len(authors)))
 		f.write('</table>')
@@ -1158,8 +1171,13 @@ class HTMLReportCreator(ReportCreator):
 			authorinfo = []
 			self.authors_by_commits = getkeyssortedbyvalues(data.tags[tag]['authors'])
 			for i in reversed(self.authors_by_commits):
-				authorinfo.append('%s (%d)' % (i, data.tags[tag]['authors'][i]))
-			f.write('<tr><td>%s</td><td>%s</td><td>%d</td><td>%s</td></tr>' % (tag, data.tags[tag]['date'], data.tags[tag]['commits'], ', '.join(authorinfo)))
+				author_name = i
+				tag_name = tag
+				author_name = anonymize_if_needed(i)
+				tag_name = anonymize_if_needed(tag)
+				authorinfo.append('%s (%d)' % (author_name, data.tags[tag]['authors'][i]))
+
+			f.write('<tr><td>%s</td><td>%s</td><td>%d</td><td>%s</td></tr>' % (tag_name, data.tags[tag]['date'], data.tags[tag]['commits'], ', '.join(authorinfo)))
 		f.write('</table>')
 
 		f.write('</body></html>')
@@ -1330,6 +1348,7 @@ plot """
 		for a in self.authors_to_plot:
 			i = i + 1
 			author = a.replace("\"", "\\\"").replace("`", "")
+			author = anonymize_if_needed(author)
 			plots.append("""'lines_of_code_by_author.dat' using 1:%d title "%s" w lines""" % (i, author))
 		f.write(", ".join(plots))
 		f.write('\n')
@@ -1359,6 +1378,7 @@ plot """
 		for a in self.authors_to_plot:
 			i = i + 1
 			author = a.replace("\"", "\\\"").replace("`", "")
+			author = anonymize_if_needed(author)
 			plots.append("""'commits_by_author.dat' using 1:%d title "%s" w lines""" % (i, author))
 		f.write(", ".join(plots))
 		f.write('\n')
@@ -1488,4 +1508,3 @@ class GitStats:
 if __name__=='__main__':
 	g = GitStats()
 	g.run(sys.argv[1:])
-
